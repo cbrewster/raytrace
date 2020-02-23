@@ -1,0 +1,11 @@
+[package]
+name = "ray-trace"
+version = "0.1.0"
+authors = ["Connor Brewster <connor.brewster@eagles.oc.edu>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+png = "0.15.3"
+nalgebra = "0.19.0"
