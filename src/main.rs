@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
-const EPSILON: f32 = 0.0002;
+const SHADOW_BIAS: f32 = 0.0002;
 
 trait Trace {
     fn intersect(&self, ray: &Ray) -> Option<Hit>;
@@ -24,6 +24,7 @@ struct Ray {
 #[derive(Debug)]
 struct Light {
     position: Point3<f32>,
+    intensity: f32,
 }
 
 #[derive(Debug)]
@@ -58,7 +59,7 @@ struct Object {
 struct Scene {
     objects: Vec<Object>,
     camera: Camera,
-    light: Light,
+    lights: Vec<Light>,
 }
 
 impl Ray {
@@ -72,8 +73,8 @@ impl Ray {
 }
 
 impl Light {
-    fn new(position: Point3<f32>) -> Light {
-        Light { position }
+    fn new(position: Point3<f32>, intensity: f32) -> Light {
+        Light { position, intensity }
     }
 }
 
@@ -141,11 +142,11 @@ impl Camera {
 }
 
 impl Scene {
-    fn new(objects: Vec<Object>, camera: Camera, light: Light) -> Scene {
+    fn new(objects: Vec<Object>, camera: Camera, lights: Vec<Light>) -> Scene {
         Scene {
             objects,
             camera,
-            light,
+            lights,
         }
     }
 
@@ -156,17 +157,24 @@ impl Scene {
             Some(hit) => hit,
         };
 
-        let hit_point = ray.point_at_distance(hit.distance) + hit.normal * EPSILON;
-        let shadow_ray_direction = (self.light.position - hit_point).normalize();
-        let shadow_ray = Ray::new(hit_point, shadow_ray_direction);
+        let hit_point = ray.point_at_distance(hit.distance) + hit.normal * SHADOW_BIAS;
+        let mut color = Vector3::new(0.0, 0.0, 0.0);
 
-        if self.intersect(&shadow_ray).is_some() {
-            return Vector3::new(0.0, 0.0, 0.0);
+        for light in &self.lights {
+            let shadow_ray_direction = (light.position - hit_point).normalize();
+            let shadow_ray = Ray::new(hit_point, shadow_ray_direction);
+
+            if self.intersect(&shadow_ray).is_some() {
+                // This light does not contribute to this object
+                continue;
+            }
+
+            let shade = f32::max(0.0, hit.normal.dot(&shadow_ray_direction));
+
+            color += shade * object.material.color * light.intensity;
         }
 
-        let shade = f32::max(0.0, hit.normal.dot(&shadow_ray_direction));
-
-        shade * object.material.color
+        color
     }
 
     fn intersect(&self, ray: &Ray) -> Option<(Hit, &Object)> {
@@ -195,11 +203,14 @@ fn main() {
         ),
     ];
 
-    let light = Light::new(Point3::new(-40.0, 20.0, 0.0));
+    let lights = vec![
+        Light::new(Point3::new(-40.0, 20.0, 0.0), 0.8),
+        Light::new(Point3::new(0.0, 20.0, -50.0), 0.4),
+    ];
 
     let camera = Camera::new(Point3::new(-30.0, 30.0, -20.0), Point3::new(0.0, 0.0, 0.0));
 
-    let scene = Scene::new(objects, camera, light);
+    let scene = Scene::new(objects, camera, lights);
 
     let mut scene_buffer = [0; (WIDTH * HEIGHT * 3) as usize];
 
