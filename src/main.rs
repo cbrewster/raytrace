@@ -2,6 +2,7 @@ use nalgebra::{Matrix4, Point3, Point4, Vector3};
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
+use rand::prelude::*;
 
 const SHADOW_BIAS: f32 = 0.0002;
 
@@ -34,6 +35,12 @@ struct Sphere {
 }
 
 #[derive(Debug)]
+struct Plane {
+    position: Point3<f32>,
+    normal: Vector3<f32>,
+}
+
+#[derive(Debug)]
 struct Camera {
     position: Point3<f32>,
     look_at: Point3<f32>,
@@ -42,6 +49,7 @@ struct Camera {
 #[derive(Debug)]
 enum Shape {
     Sphere(Sphere),
+    Plane(Plane),
 }
 
 #[derive(Debug)]
@@ -85,12 +93,20 @@ impl Object {
             material: Material { color },
         }
     }
+
+    fn plane(position: Point3<f32>, normal: Vector3<f32>, color: Vector3<f32>) -> Object {
+        Object {
+            shape: Shape::Plane(Plane::new(position, normal)),
+            material: Material { color },
+        }
+    }
 }
 
 impl Trace for Object {
     fn intersect(&self, ray: &Ray) -> Option<Hit> {
         match &self.shape {
             Shape::Sphere(sphere) => sphere.intersect(ray),
+            Shape::Plane(plane) => plane.intersect(ray),
         }
     }
 }
@@ -131,6 +147,38 @@ impl Trace for Sphere {
         Some(Hit {
             distance,
             normal,
+        })
+    }
+}
+
+
+impl Plane {
+    fn new(position: Point3<f32>, normal: Vector3<f32>) -> Plane {
+        Plane {
+            position,
+            normal,
+        }
+    }
+}
+
+impl Trace for Plane {
+    fn intersect(&self, ray: &Ray) -> Option<Hit> {
+        // TODO: Investigate why I have to do this...
+        let inverted_normal = -self.normal;
+        let denom = inverted_normal.dot(&ray.direction);
+        if denom <= 1e-6 {
+            return None;
+        }
+
+        let plane_to_ray = self.position - ray.origin;
+        let t = plane_to_ray.dot(&inverted_normal) / denom;
+        if t < 0.0 {
+            return None;
+        }
+
+        Some(Hit {
+            distance: t,
+            normal: self.normal,
         })
     }
 }
@@ -187,28 +235,30 @@ impl Scene {
 
 const WIDTH: u32 = 1600;
 const HEIGHT: u32 = 1200;
+const SAMPLES: u32 = 8;
 
 fn main() {
     let objects = vec![
+        Object::plane(Point3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 1.0, 1.0)),
         Object::sphere(
-            Point3::new(-10.0, 0.0, 0.0),
+            Point3::new(-10.0, 2.0, 0.0),
             2.0,
             Vector3::new(1.0, 0.0, 0.0),
         ),
-        Object::sphere(Point3::new(0.0, 0.0, 0.0), 5.0, Vector3::new(0.0, 1.0, 0.0)),
+        Object::sphere(Point3::new(0.0, 5.0, 0.0), 5.0, Vector3::new(0.0, 1.0, 0.0)),
         Object::sphere(
-            Point3::new(20.0, 0.0, 0.0),
+            Point3::new(20.0, 10.0, 0.0),
             10.0,
             Vector3::new(0.0, 0.0, 1.0),
         ),
     ];
 
     let lights = vec![
-        Light::new(Point3::new(-40.0, 20.0, 0.0), 0.8),
-        Light::new(Point3::new(0.0, 20.0, -50.0), 0.4),
+        Light::new(Point3::new(0.0, 30.0,   0.0), 0.5),
+        Light::new(Point3::new(0.0, 25.0, -50.0), 0.4),
     ];
 
-    let camera = Camera::new(Point3::new(-30.0, 30.0, -20.0), Point3::new(0.0, 0.0, 0.0));
+    let camera = Camera::new(Point3::new(-25.0, 2.0, -20.0), Point3::new(0.0, 5.0, 0.0));
 
     let scene = Scene::new(objects, camera, lights);
 
@@ -226,30 +276,38 @@ fn main() {
     );
 
     let start = std::time::Instant::now();
+    let mut rng = thread_rng();
 
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
-            let norm_x = (x as f32 + 0.5) / WIDTH as f32;
-            let norm_y = (y as f32 + 0.5) / HEIGHT as f32;
-            // Scale the x pixel according to the aspect ratio
-            let screen_x = (2.0 * norm_x - 1.0) * aspect_ratio * fov_adjust;
-            // Invert the y so +1 is at the top and -1 is at the bottom
-            let screen_y = (1.0 - 2.0 * norm_y) * fov_adjust;
+            let mut color = Vector3::new(0.0, 0.0, 0.0);
+            for _ in 0..SAMPLES {
+                let x_offset = rng.gen_range(-0.5, 0.5);
+                let y_offset = rng.gen_range(-0.5, 0.5);
+                let norm_x = (x as f32 + 0.5 + x_offset) / WIDTH as f32;
+                let norm_y = (y as f32 + 0.5 + y_offset) / HEIGHT as f32;
+                // Scale the x pixel according to the aspect ratio
+                let screen_x = (2.0 * norm_x - 1.0) * aspect_ratio * fov_adjust;
+                // Invert the y so +1 is at the top and -1 is at the bottom
+                let screen_y = (1.0 - 2.0 * norm_y) * fov_adjust;
 
-            let camera_point = Point4::new(screen_x, screen_y, 1.0, 1.0);
+                let camera_point = Point4::new(screen_x, screen_y, 1.0, 1.0);
 
-            let origin = camera_matrix * Point4::new(0.0, 0.0, 0.0, 1.0);
-            let target = camera_matrix * camera_point;
+                let origin = camera_matrix * Point4::new(0.0, 0.0, 0.0, 1.0);
+                let target = camera_matrix * camera_point;
 
-            let direction = (target - origin).xyz().normalize();
+                let direction = (target - origin).xyz().normalize();
 
-            let ray = Ray::new(origin.xyz(), direction);
+                let ray = Ray::new(origin.xyz(), direction);
+                let hit_color = scene.trace(&ray);
+
+                color += hit_color / (SAMPLES as f32);
+            }
+
             let index = ((y * WIDTH + x) * 3) as usize;
-            let color = scene.trace(&ray);
-
-            scene_buffer[index]     = (color.x * 255.0) as u8;
-            scene_buffer[index + 1] = (color.y * 255.0) as u8;
-            scene_buffer[index + 2] = (color.z * 255.0) as u8;
+            scene_buffer[index]     = (f32::min(1.0, color.x) * 255.0) as u8;
+            scene_buffer[index + 1] = (f32::min(1.0, color.y) * 255.0) as u8;
+            scene_buffer[index + 2] = (f32::min(1.0, color.z) * 255.0) as u8;
         }
     }
 
